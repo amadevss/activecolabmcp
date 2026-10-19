@@ -1,8 +1,8 @@
 import { cloudLogin, cloudLoginTwoFactor, issueAccountToken, type CloudAccount, type CloudLoginResult } from "@/lib/activecollab/client";
 import { open, randomId, safeEqual, seal } from "@/lib/auth/crypto";
 import { readParams } from "@/lib/auth/http";
+import { checkAccountAccess } from "@/lib/auth/access";
 import {
-  allowedAccountIds,
   AUTH_REQUEST_TTL,
   type AuthRequest,
   issueCode,
@@ -14,6 +14,7 @@ import {
   SCOPE,
 } from "@/lib/auth/oauth";
 import { chooseAccountPage, errorPage, htmlResponse, loginPage, twoFactorPage } from "@/lib/auth/pages";
+import { clientIp, hashKey, rateLimitAll, waitMessage } from "@/lib/rate-limit";
 
 const isHttps = (origin: string) => origin.startsWith("https://");
 const cookieName = (origin: string) => (isHttps(origin) ? "__Host-acmcp_auth" : "acmcp_auth");
@@ -125,12 +126,15 @@ export async function POST(req: Request) {
       const pending: PendingLogin = { kind: "two_factor", intentId: result.intentId, email };
       return page(twoFactorPage({ reqToken, pendingToken: seal("pending", { ...pending, nonce: authReq.nonce }, PENDING_TTL) }));
     }
-    const allowed = allowedAccountIds();
-    const accounts = result.accounts.filter((a) => !allowed.length || allowed.includes(a.id));
+    const decisions = await Promise.all(result.accounts.map((a) => checkAccountAccess(a.id)));
+    const accounts = result.accounts.filter((_, i) => decisions[i].allowed);
     if (!accounts.length) {
+      const reason = decisions.find((d) => !d.allowed);
       return errorPage(
         "Sin acceso",
-        "Tu usuario no tiene acceso a ninguna cuenta de ActiveCollab permitida en este servidor.",
+        reason && !reason.allowed
+          ? reason.reason
+          : "Tu usuario no tiene ninguna cuenta de ActiveCollab disponible.",
         403,
       );
     }
@@ -159,6 +163,11 @@ export async function POST(req: Request) {
         const email = (form.email || "").trim().slice(0, 254);
         const password = (form.password || "").slice(0, 512);
         if (!email || !password) return login("Escribe tu email y tu contraseña.", email);
+        const limited = await rateLimitAll([
+          ["loginIp", clientIp(req)],
+          ["loginEmail", hashKey(email)],
+        ]);
+        if (!limited.ok) return login(waitMessage(limited.retryAfterSeconds), email);
         return await afterLogin(await cloudLogin(email, password), email);
       }
 
@@ -167,6 +176,10 @@ export async function POST(req: Request) {
         if (!pending || pending.kind !== "two_factor") return login("La verificación caducó. Inicia sesión de nuevo.");
         const code = (form.code || "").replace(/\s+/g, "").slice(0, 32);
         if (!code) return page(twoFactorPage({ reqToken, pendingToken: form.pending, error: "Escribe el código." }));
+        const limited = await rateLimitAll([["twoFactorIp", clientIp(req)]]);
+        if (!limited.ok) {
+          return page(twoFactorPage({ reqToken, pendingToken: form.pending, error: waitMessage(limited.retryAfterSeconds) }));
+        }
         return await afterLogin(await cloudLoginTwoFactor(pending.intentId, code), pending.email, form.pending);
       }
 
@@ -175,6 +188,8 @@ export async function POST(req: Request) {
         if (!pending || pending.kind !== "choose_account") return login("La selección caducó. Inicia sesión de nuevo.");
         const account = pending.accounts.find((a) => a.id === form.account);
         if (!account) return login("Cuenta no válida.");
+        const decision = await checkAccountAccess(account.id);
+        if (!decision.allowed) return errorPage("Sin acceso", decision.reason, 403);
         return await finish(account, pending.email);
       }
 

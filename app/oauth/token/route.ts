@@ -1,5 +1,7 @@
 import { acRequest, ActiveCollabError } from "@/lib/activecollab/client";
 import { corsPreflight, jsonResponse, oauthError, readParams } from "@/lib/auth/http";
+import { checkAccountAccess } from "@/lib/auth/access";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { authenticateClient, issueTokens, publicOrigin, readClient, readRefreshToken, redeemCode } from "@/lib/auth/oauth";
 
 function basicAuth(req: Request): { id?: string; secret?: string } {
@@ -15,6 +17,10 @@ function basicAuth(req: Request): { id?: string; secret?: string } {
 
 export async function POST(req: Request) {
   const origin = publicOrigin(req);
+  const limited = await rateLimit("token", clientIp(req));
+  if (!limited.ok) {
+    return oauthError("slow_down", "Demasiadas peticiones. Inténtalo más tarde.", 429, { "Retry-After": String(limited.retryAfterSeconds) });
+  }
   const p = await readParams(req);
   const basic = basicAuth(req);
   const clientId = basic.id || p.client_id || "";
@@ -34,6 +40,8 @@ export async function POST(req: Request) {
   if (p.grant_type === "refresh_token") {
     const grant = readRefreshToken(p.refresh_token || "", clientId, origin);
     if (!grant) return oauthError("invalid_grant", "Refresh token inválido o caducado.");
+    const decision = await checkAccountAccess(grant.acct);
+    if (!decision.allowed) return oauthError("invalid_grant", decision.reason);
     // Antes de renovar, se comprueba que el token de ActiveCollab siga activo (no revocado).
     try {
       await acRequest("GET", "/user-session", {}, { accountId: grant.acct, token: grant.act, email: grant.em });

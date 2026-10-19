@@ -1,21 +1,53 @@
 # ActiveCollab MCP
 
-Servidor MCP que conecta **Claude** con **ActiveCollab** para todo un equipo. Se despliega una vez en Vercel y cada persona solo tiene que pegar la URL en Claude e iniciar sesión con **su propia cuenta de ActiveCollab**. Claude trabaja con los permisos de esa persona: ve sus proyectos, y lo que crea queda a su nombre.
+Conecta **Claude** con **ActiveCollab**. Cualquier persona con una cuenta de ActiveCollab pega una URL en Claude, inicia sesión con su cuenta y listo. Desde el chat, Claude puede revisar tareas, crear proyectos, registrar horas, comentar, consultar facturas y usar cualquier otra función de la API, siempre con los permisos de esa persona.
 
 El repo incluye la **documentación completa de la API de ActiveCollab** (124 páginas, 275 endpoints) en [`docs/activecollab-api`](docs/activecollab-api/README.md). Claude la consulta para saber qué endpoint usar en cada caso.
+
+> Servicio independiente, no afiliado ni respaldado por ActiveCollab.
+
+Hay dos formas de usarlo:
+
+| | Cómo | Para quién |
+|---|---|---|
+| **Servicio público** | Pegas la URL del servicio en Claude y listo | Cualquier persona con cuenta de ActiveCollab |
+| **Tu propio servidor** | Despliegas tu copia en Vercel, limitada a tu empresa | Empresas que prefieren su propia infraestructura |
+
+## Usar el servicio
+
+**Claude (web, escritorio y móvil):**
+1. **Ajustes → Conectores → Agregar conector personalizado**.
+2. Nombre: `ActiveCollab`. URL: `https://<dominio-del-servicio>/api/mcp`.
+3. Pulsa **Conectar** e inicia sesión con tu cuenta de ActiveCollab. Si tienes verificación en dos pasos, también te pedirá el código. Si tienes varias cuentas, eliges una.
+4. En un chat, activa el conector desde el menú de herramientas.
+
+> En planes Team o Enterprise de Claude, quien administra la organización puede agregar el conector una vez para todos. Después, cada persona solo pulsa **Conectar**.
+
+**Claude Code:**
+```bash
+claude mcp add --transport http activecollab https://<dominio-del-servicio>/api/mcp
+```
+Después ejecuta `/mcp` y elige **Authenticate**.
+
+### Ejemplos
+
+- "¿Qué tareas tengo pendientes y cuáles vencen esta semana?"
+- "Crea una tarea 'Revisar maqueta' en el proyecto Web, asignada a Ana, para el viernes"
+- "Registra 2,5 horas hoy en la tarea 34 del proyecto Web: reunión con cliente"
+- "¿Cuántas horas registró el equipo en el proyecto Web este mes?"
+- "Muéstrame las facturas pendientes de pago"
 
 ## Cómo funciona
 
 ```
-Claude ──MCP + OAuth──▶ Vercel: /api/mcp ──API v1 (token de cada persona)──▶ app.activecollab.com/<cuenta>
+Claude ──MCP + OAuth──▶ servidor: /api/mcp ──API v1 (token de cada persona)──▶ app.activecollab.com/<cuenta>
 ```
 
-1. La persona agrega `https://<tu-app>.vercel.app/api/mcp` en Claude y pulsa **Conectar**.
-2. Se abre la página de inicio de sesión del servidor. Ahí pone su email y contraseña de ActiveCollab, el código de verificación en dos pasos si lo tiene, y elige la cuenta si tiene varias.
-3. El servidor pide a ActiveCollab un token para esa persona y se lo entrega a Claude **cifrado**. No se guarda nada en ninguna base de datos.
-4. Desde ese momento, cada acción de Claude usa el token de esa persona.
+1. Claude detecta que el servidor pide inicio de sesión y abre la página de login.
+2. La persona inicia sesión con ActiveCollab. El servidor pide a ActiveCollab un token para ella y se lo entrega a Claude **cifrado**. El servidor no guarda nada.
+3. Desde ese momento, cada acción de Claude usa el token de esa persona.
 
-Claude tiene tres tipos de herramientas:
+Herramientas que ve Claude:
 
 | Tipo | Herramientas |
 |---|---|
@@ -23,78 +55,39 @@ Claude tiene tres tipos de herramientas:
 | **Documentación** | `search_api_docs` (busca endpoints, también en español), `get_api_doc_page` (ejemplos reales de cada endpoint), `list_api_endpoints` |
 | **Acceso total** | `activecollab_api_request`: llama a cualquier endpoint (facturas, presupuestos, equipos, reportes, papelera…) |
 
-## Puesta en marcha (solo la persona que administra, una vez)
+## Poner en marcha el servicio público
 
-### 1. Genera la clave de cifrado
+Así se configura el servicio principal en Vercel Pro:
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
-```
-
-Guárdala como secreto. Es tu `AUTH_SECRET`.
-
-### 2. Despliega en Vercel
-
-1. En [vercel.com/new](https://vercel.com/new) importa este repositorio. Vercel detecta Next.js solo.
-2. En **Settings → Environment Variables** agrega:
+1. **Importa el repo** en [vercel.com/new](https://vercel.com/new).
+2. **Agrega Upstash Redis:** en el proyecto, **Storage → Create Database → Upstash for Redis** (el plan gratuito sobra) y conéctalo al proyecto. Las variables se crean solas.
+3. **Variables de entorno** (**Settings → Environment Variables**):
 
 | Variable | Valor |
 |---|---|
-| `AUTH_SECRET` | la clave del paso 1 (obligatoria) |
-| `PUBLIC_URL` | `https://<tu-app>.vercel.app` (recomendado) |
-| `ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS` | el ID de tu cuenta, p. ej. `123456` (recomendado: solo tu equipo podrá entrar) |
-| `ACTIVECOLLAB_READ_ONLY` | *(opcional)* `true` para que Claude solo pueda leer |
+| `AUTH_SECRET` | clave aleatoria: `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` |
+| `PUBLIC_URL` | `https://<tu-dominio>` (sin barra final) |
 
-3. Vuelve a desplegar (**Deployments → Redeploy**) para que tome las variables.
-4. Abre `https://<tu-app>.vercel.app`: debe aparecer la página "ActiveCollab MCP".
+   **No** pongas `ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS`: sin esa variable, el servicio queda abierto a cualquier cuenta de ActiveCollab.
+4. **Redespliega** (**Deployments → Redeploy**) para que tome las variables.
+5. **Opcional:** agrega un dominio propio en **Settings → Domains** y actualiza `PUBLIC_URL`.
+6. **Opcional:** en **Firewall**, crea una regla con límite de peticiones para `/oauth/` como protección extra.
+7. **Comprueba** que `https://<tu-dominio>` muestre la página del servicio y que `https://<tu-dominio>/.well-known/oauth-authorization-server` devuelva JSON. Después conecta tu propia cuenta desde Claude.
 
-> El ID de la cuenta es el número que aparece en la URL cuando entras a ActiveCollab: `app.activecollab.com/123456`.
->
+## Desplegar tu propio servidor
+
+Para usarlo solo dentro de tu empresa:
+
+1. Pulsa el botón **Desplegar en Vercel** de la página del servicio, o importa este repo en Vercel.
+2. Configura estas variables:
+   - `AUTH_SECRET`: una clave aleatoria de al menos 32 caracteres.
+   - `ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS`: el ID de tu cuenta, el número de `app.activecollab.com/123456`. Puedes poner varios separados por comas.
+   - `SERVICE_OWNER_NAME` y `SERVICE_CONTACT_EMAIL`: tu nombre o empresa y tu email. Aparecen en la política de privacidad.
+   - `PUBLIC_URL`: recomendada.
+3. Recomendado: agrega Upstash Redis como en el paso 2 de la sección anterior.
+4. Comparte con tu equipo `https://<tu-app>.vercel.app/api/mcp`.
+
 > Usa el dominio de producción. Las URLs de preview suelen estar protegidas por Vercel y Claude no puede entrar.
-
-### 3. Comparte la URL con tu equipo
-
-```
-https://<tu-app>.vercel.app/api/mcp
-```
-
-## Conectarse (cada persona)
-
-**Claude (web, escritorio y móvil):**
-1. **Ajustes → Conectores → Agregar conector personalizado**.
-2. Nombre: `ActiveCollab`. URL: `https://<tu-app>.vercel.app/api/mcp`.
-3. Pulsa **Conectar** e inicia sesión con tu cuenta de ActiveCollab.
-4. En un chat, activa el conector desde el menú de herramientas.
-
-> En planes Team o Enterprise, quien administra la organización en Claude puede agregar el conector una vez para todos. Después, cada persona solo pulsa **Conectar** e inicia sesión.
-
-**Claude Code:**
-```bash
-claude mcp add --transport http activecollab https://<tu-app>.vercel.app/api/mcp
-```
-Después ejecuta `/mcp` dentro de Claude Code y elige **Authenticate**.
-
-### Ejemplos
-
-- "¿Con qué usuario estás conectado a ActiveCollab?"
-- "¿Qué tareas tengo pendientes y cuáles vencen esta semana?"
-- "Crea una tarea 'Revisar maqueta' en el proyecto Web, asignada a Ana, para el viernes"
-- "Registra 2,5 horas hoy en la tarea 34 del proyecto Web: reunión con cliente"
-- "Muéstrame las facturas pendientes de pago" *(usa la documentación y la llamada general)*
-
-## Seguridad
-
-- **Cada persona usa sus propios permisos** de ActiveCollab. Claude no puede ver ni hacer nada que esa persona no pueda hacer.
-- **Contraseñas:** solo se usan en el momento del login para pedir un token a ActiveCollab. No se guardan ni se registran en los logs.
-- **Tokens cifrados:** se usa AES-256-GCM con una clave distinta para cada tipo de token, derivada de `AUTH_SECRET`. El token de ActiveCollab nunca viaja en claro. Los access tokens duran 1 hora y los refresh tokens 30 días.
-- **Solo clientes de Claude:** el login solo puede devolver a `claude.ai`, `claude.com` o `localhost` (Claude Code y Desktop). Ningún otro sitio puede usar tu servidor para pedir accesos.
-- **OAuth 2.1 con PKCE (S256) obligatorio:** los códigos de autorización caducan en 1 minuto y los tokens van ligados a este servidor.
-- **Página de login protegida:** cookie anti-CSRF ligada al navegador, comprobación del origen, CSP estricta sin JavaScript, sin iframes y sin caché.
-- **Al renovar el acceso** se comprueba que el token de ActiveCollab siga activo. Si se revocó, hay que volver a iniciar sesión.
-- **`ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS`** limita el servidor a tu empresa. Sin esta variable, cualquier persona con una cuenta de ActiveCollab podría usar tu servidor (solo con su propia cuenta).
-- **Cerrar todas las sesiones:** cambia `AUTH_SECRET` en Vercel y vuelve a desplegar. Todos los tokens dejan de valer.
-- **Quitar el acceso a una persona:** desactiva o archiva su usuario en ActiveCollab. ActiveCollab rechaza sus peticiones y la siguiente renovación del acceso falla.
-- **Límites:** ActiveCollab aplica sus propios límites a los intentos de login. Si quieres más protección, activa el [Firewall de Vercel](https://vercel.com/docs/vercel-firewall) con límite de peticiones para `/oauth/authorize`.
 
 ## Variables de entorno
 
@@ -103,10 +96,33 @@ Ver [`.env.example`](.env.example).
 | Variable | Obligatoria | Descripción |
 |---|---|---|
 | `AUTH_SECRET` | Sí | Clave maestra de cifrado (mínimo 32 caracteres) |
-| `PUBLIC_URL` | Recomendada | URL pública del servidor, sin barra final |
-| `ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS` | Recomendada | IDs de cuentas permitidas, separados por comas |
+| `PUBLIC_URL` | Recomendada | URL pública, sin barra final |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Recomendada | Límite de intentos (también acepta `KV_REST_API_URL` / `KV_REST_API_TOKEN`) |
+| `ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS` | No | Limita el acceso a esas cuentas. Vacía = cualquier cuenta |
 | `ACTIVECOLLAB_READ_ONLY` | No | `true` bloquea todo lo que no sea lectura |
+| `SERVICE_NAME`, `SERVICE_OWNER_NAME`, `SERVICE_CONTACT_EMAIL` | No | Datos de la página pública y de las políticas |
 | `OAUTH_ALLOWED_REDIRECT_HOSTS` | No | Hosts extra a los que se permite volver tras el login |
+
+## Seguridad
+
+- **Permisos propios:** cada persona usa sus permisos de ActiveCollab. Claude no puede hacer nada que esa persona no pueda hacer.
+- **Contraseñas:** solo se usan en el momento del login para pedir un token a ActiveCollab. No se guardan ni se registran.
+- **Tokens cifrados:** AES-256-GCM, con una clave distinta para cada tipo de token, derivada de `AUTH_SECRET`. El token de ActiveCollab nunca viaja en claro. Los access tokens duran 1 hora y los refresh tokens 30 días.
+- **Solo clientes de Claude:** el login solo puede devolver a `claude.ai`, `claude.com` o `localhost` (Claude Code y Desktop).
+- **OAuth 2.1 con PKCE (S256) obligatorio:** los códigos caducan en 1 minuto y los tokens van ligados a este servidor.
+- **Página de login protegida:** cookie anti-CSRF ligada al navegador, comprobación del origen, CSP estricta sin JavaScript y sin iframes.
+- **Límite de intentos con Upstash:**
+  - Login: 10 por IP cada 10 minutos y 5 por email cada 15 minutos.
+  - Registro de clientes y tokens: también limitados.
+  - Redis solo guarda la IP y un hash del email, que se borran solos.
+  - Si Redis no responde, el servicio sigue funcionando sin límite.
+- **Al renovar el acceso** se comprueba que el token de ActiveCollab siga activo.
+- **Cerrar todas las sesiones:** cambia `AUTH_SECRET` y redespliega.
+- **Cabeceras de seguridad** en todo el sitio: HSTS, `nosniff`, `DENY` para iframes y `Permissions-Policy`.
+
+## Cobro (más adelante)
+
+El acceso se decide en un solo lugar: [`lib/auth/access.ts`](lib/auth/access.ts). Se consulta al iniciar sesión, en cada renovación y en cada petición MCP. Para cobrar una suscripción bastará con que esa función consulte qué cuentas tienen el pago al día. Por ejemplo, con un webhook de Stripe que guarde las cuentas activas en Redis. Dejar de pagar cortaría el acceso en la siguiente petición.
 
 ## Desarrollo local
 
@@ -123,28 +139,26 @@ npx @modelcontextprotocol/inspector
 
 ## Actualizar la documentación de la API
 
-La documentación se genera a partir de https://developers.activecollab.com/api-documentation/:
-
 ```bash
 pip install beautifulsoup4
 npm run docs:build
 ```
 
-Esto regenera `docs/activecollab-api/` (markdown legible) y `lib/activecollab/api-docs.generated.json` (lo que usa el servidor).
+Esto regenera `docs/activecollab-api/` y `lib/activecollab/api-docs.generated.json` a partir de https://developers.activecollab.com/api-documentation/.
 
 ## Estructura
 
 ```
+app/page.tsx                             Página pública del servicio
+app/privacidad, app/terminos             Política de privacidad y términos de uso
 app/api/mcp/route.ts                     Endpoint MCP (requiere access token OAuth)
 app/.well-known/oauth-*/                 Metadatos OAuth (descubrimiento automático)
-app/oauth/register/route.ts              Registro dinámico de clientes (Claude se registra solo)
-app/oauth/authorize/route.ts             Página de login de ActiveCollab
-app/oauth/token/route.ts                 Emisión y renovación de tokens
-lib/auth/                                Cifrado, lógica OAuth y páginas de login
-lib/mcp/handler.ts                       Servidor MCP con autenticación
-lib/mcp/tools.ts                         Herramientas que ve Claude
-lib/activecollab/client.ts               Cliente de la API de ActiveCollab
-lib/activecollab/docs.ts                 Búsqueda en la documentación
+app/oauth/register|authorize|token       Registro de clientes, login y emisión de tokens
+lib/auth/                                Cifrado, OAuth, páginas de login y control de acceso
+lib/rate-limit.ts                        Límite de intentos (Upstash Redis)
+lib/mcp/                                 Servidor MCP y herramientas
+lib/activecollab/                        Cliente de la API y búsqueda en la documentación
+lib/site.ts                              Nombre, responsable y contacto del servicio
 docs/activecollab-api/                   Documentación de la API en markdown
 scripts/build-api-docs.py                Regenera la documentación
 ```

@@ -42,14 +42,6 @@ export function isAllowedRedirectUri(uri: string): boolean {
   return allowedRedirectHosts().some((h) => host === h || host.endsWith("." + h));
 }
 
-/** Cuentas de ActiveCollab que pueden usar el servidor (vacío = cualquiera). */
-export function allowedAccountIds(): string[] {
-  return (process.env.ACTIVECOLLAB_ALLOWED_ACCOUNT_IDS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 // ---------- clientes (registro dinámico, sin base de datos) ----------
 
 export type AuthMethod = "none" | "client_secret_post" | "client_secret_basic";

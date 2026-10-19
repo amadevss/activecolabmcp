@@ -1,9 +1,14 @@
 import { corsPreflight, jsonResponse, oauthError } from "@/lib/auth/http";
 import { type AuthMethod, isAllowedRedirectUri, registerClient, SCOPE } from "@/lib/auth/oauth";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 // Registro dinámico de clientes (RFC 7591). Claude se registra solo al agregar el conector.
 // No se guarda nada: el client_id es un token cifrado con las redirect_uris permitidas.
 export async function POST(req: Request) {
+  const limited = await rateLimit("register", clientIp(req));
+  if (!limited.ok) {
+    return oauthError("slow_down", "Demasiados registros. Inténtalo más tarde.", 429, { "Retry-After": String(limited.retryAfterSeconds) });
+  }
   let body: Record<string, unknown>;
   try {
     body = JSON.parse((await req.text()).slice(0, 16 * 1024));

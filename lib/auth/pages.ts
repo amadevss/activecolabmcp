@@ -22,6 +22,7 @@ input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .acct{display:block;width:100%;text-align:left;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--text);font-size:16px;cursor:pointer}
 .acct small{color:var(--muted)}
 .note{font-size:13px;margin-top:18px}
+a{color:var(--accent)}
 `;
 
 const STYLE_HASH = createHash("sha256").update(STYLE).digest("base64");
@@ -65,7 +66,7 @@ ${errorBox(o.error)}
 <button class="btn" type="submit">Iniciar sesión y conectar</button>
 </form>
 ${cancelButton(o.reqToken)}
-<p class="note">Tu contraseña solo se usa para pedir un token a ActiveCollab y no se guarda.</p>`,
+<p class="note">Tu contraseña solo se usa para pedir un token a ActiveCollab y no se guarda. Al continuar aceptas los <a href="/terminos" target="_blank" rel="noopener">términos</a> y la <a href="/privacidad" target="_blank" rel="noopener">política de privacidad</a>. Servicio independiente, no afiliado a ActiveCollab.</p>`,
   );
 }
 

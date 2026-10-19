@@ -1,5 +1,6 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { runWithCredentials } from "@/lib/activecollab/client";
+import { checkAccountAccess } from "@/lib/auth/access";
 import { publicOrigin, readAccessToken, SCOPE } from "@/lib/auth/oauth";
 import { registerTools, SERVER_INSTRUCTIONS } from "./tools";
 
@@ -36,6 +37,7 @@ export async function handleMcpRequest(req: Request) {
     async (_req, bearerToken) => {
       const data = readAccessToken(bearerToken, origin);
       if (!data) return undefined;
+      if (!(await checkAccountAccess(data.acct)).allowed) return undefined;
       return {
         token: bearerToken!,
         clientId: data.cid,
