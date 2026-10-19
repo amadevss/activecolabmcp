@@ -7,7 +7,6 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "get-token": "node scripts/get-token.mjs",
     "docs:build": "python3 scripts/build-api-docs.py"
   },
   "dependencies": {

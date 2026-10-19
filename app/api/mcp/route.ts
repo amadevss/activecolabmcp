@@ -1,6 +1,6 @@
 import { handleMcpRequest } from "@/lib/mcp/handler";
 
-// Endpoint MCP con la clave en la cabecera: Authorization: Bearer <MCP_SECRET>
+// Endpoint MCP. Cada persona se conecta con su propia cuenta de ActiveCollab vía OAuth.
 export const maxDuration = 60;
 
 const handler = (req: Request) => handleMcpRequest(req);

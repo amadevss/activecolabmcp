@@ -1,6 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { acRequest, ActiveCollabError, getConfig, type HttpMethod } from "@/lib/activecollab/client";
+import {
+  accountBaseUrl,
+  acRequest,
+  ActiveCollabError,
+  currentCredentials,
+  getConfig,
+  type HttpMethod,
+  runWithCredentials,
+} from "@/lib/activecollab/client";
 import { docsSource, endpoints, getPage, pages, searchDocs } from "@/lib/activecollab/docs";
 
 const MAX_OUTPUT_CHARS = 90_000;
@@ -85,7 +93,26 @@ export const SERVER_INSTRUCTIONS = `Servidor MCP para ActiveCollab (gestión de 
 
 // ---------- registro ----------
 
-export function registerTools(server: McpServer) {
+/**
+ * Cada herramienta se ejecuta con las credenciales de quien la llama, tomadas del token OAuth
+ * validado (extra.authInfo). Así nunca se mezclan cuentas entre personas.
+ */
+function withUserCredentials(server: McpServer): McpServer {
+  const original = server.registerTool.bind(server);
+  const wrapped = ((name: string, config: unknown, cb: (...a: unknown[]) => unknown) =>
+    original(name, config as never, ((...args: unknown[]) => {
+      const extra = args[args.length - 1] as { authInfo?: { extra?: Record<string, unknown> } } | undefined;
+      const info = extra?.authInfo?.extra;
+      if (!info?.acct || !info?.act) return fail(new ActiveCollabError("Sesión no válida. Vuelve a conectar el conector en Claude."));
+      return runWithCredentials({ accountId: String(info.acct), token: String(info.act), email: String(info.em ?? "") }, () =>
+        cb(...args),
+      );
+    }) as never)) as McpServer["registerTool"];
+  return Object.assign(Object.create(server), { registerTool: wrapped });
+}
+
+export function registerTools(baseServer: McpServer) {
+  const server = withUserCredentials(baseServer);
   // ===== Documentación =====
 
   server.registerTool(
@@ -181,10 +208,15 @@ export function registerTools(server: McpServer) {
     },
     async () =>
       run(async () => {
-        const cfg = getConfig();
+        const creds = currentCredentials();
         const uid = await currentUserId();
         const user = uid ? await acRequest<Json>("GET", `/users/${uid}`) : null;
-        return { account_url: cfg.baseUrl, read_only: cfg.readOnly, user: pick(user?.single ?? user, USER_KEYS) };
+        return {
+          account_id: creds.accountId,
+          account_url: accountBaseUrl(creds.accountId),
+          read_only: getConfig().readOnly,
+          user: pick(user?.single ?? user, USER_KEYS),
+        };
       }),
   );
 

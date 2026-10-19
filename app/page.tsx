@@ -18,14 +18,18 @@ export default function Home() {
             En Claude abre <strong>Ajustes → Conectores → Agregar conector personalizado</strong>.
           </li>
           <li>
-            Usa esta URL, cambiando <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">TU_CLAVE</code> por el
-            valor de <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">MCP_SECRET</code>:
+            Pega esta URL (la misma para todo el equipo):
             <pre className="mt-2 overflow-x-auto rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-900">
-              https://&lt;tu-app&gt;.vercel.app/api/mcp/TU_CLAVE
+              https://&lt;este-sitio&gt;/api/mcp
             </pre>
           </li>
+          <li>Pulsa <strong>Conectar</strong> e inicia sesión con tu cuenta de ActiveCollab.</li>
           <li>Activa el conector en el chat y pídele a Claude, por ejemplo: “¿Qué tareas tengo pendientes esta semana?”.</li>
         </ol>
+        <p className="text-sm text-zinc-500">
+          Cada persona usa su propia cuenta y sus propios permisos. Tu contraseña solo se usa para pedir un token a
+          ActiveCollab y no se guarda.
+        </p>
       </section>
 
       <p className="text-sm text-zinc-500">

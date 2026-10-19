@@ -1,18 +1,17 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /**
- * Cliente mínimo para la API v1 de ActiveCollab.
+ * Cliente para la API v1 de ActiveCollab (nube).
  *
- * Configuración (variables de entorno):
- *   ACTIVECOLLAB_ACCOUNT_ID   ID de la cuenta en la nube (el número de app.activecollab.com/123456)
- *   ACTIVECOLLAB_BASE_URL     Opcional. URL base de la instalación (por defecto https://app.activecollab.com/<ACCOUNT_ID>)
- *   ACTIVECOLLAB_TOKEN        Token de la API (recomendado; se obtiene con `npm run get-token`)
- *   ACTIVECOLLAB_EMAIL        Alternativa al token: el servidor pide uno con email y contraseña
- *   ACTIVECOLLAB_PASSWORD
- *   ACTIVECOLLAB_READ_ONLY    "true" para bloquear todo lo que no sea GET
+ * Cada petición usa las credenciales de la persona conectada (las pone el endpoint MCP
+ * después de validar su access token). El servidor no tiene credenciales propias.
  */
 
-const CLOUD_LOGIN_URL = "https://activecollab.com/api/v1/external/login";
-const CLIENT_VENDOR = process.env.ACTIVECOLLAB_CLIENT_VENDOR || "ActiveCollab MCP";
-const CLIENT_NAME = process.env.ACTIVECOLLAB_CLIENT_NAME || "Claude MCP Server";
+export type AcCredentials = {
+  accountId: string;
+  token: string;
+  email?: string;
+};
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -27,138 +26,121 @@ export class ActiveCollabError extends Error {
   }
 }
 
+// Solo para pruebas locales: permiten apuntar a un simulador. En producción no se definen.
+const CLOUD_BASE = (process.env.ACTIVECOLLAB_CLOUD_BASE_URL || "https://app.activecollab.com").replace(/\/+$/, "");
+const LOGIN_URL = process.env.ACTIVECOLLAB_LOGIN_URL || "https://activecollab.com/api/v1/external/login";
+
+const CLIENT_VENDOR = "ActiveCollab MCP";
+const CLIENT_NAME = "Claude";
+
 export function getConfig() {
-  const accountId = process.env.ACTIVECOLLAB_ACCOUNT_ID?.trim();
-  const baseUrl = (
-    process.env.ACTIVECOLLAB_BASE_URL?.trim() ||
-    (accountId ? `https://app.activecollab.com/${accountId}` : "")
-  ).replace(/\/+$/, "");
-  return {
-    accountId,
-    baseUrl,
-    apiUrl: baseUrl ? `${baseUrl}/api/v1` : "",
-    token: process.env.ACTIVECOLLAB_TOKEN?.trim(),
-    email: process.env.ACTIVECOLLAB_EMAIL?.trim(),
-    password: process.env.ACTIVECOLLAB_PASSWORD,
-    readOnly: process.env.ACTIVECOLLAB_READ_ONLY === "true",
-  };
+  return { readOnly: process.env.ACTIVECOLLAB_READ_ONLY === "true" };
 }
+
+export function accountBaseUrl(accountId: string) {
+  if (!/^\d{1,12}$/.test(accountId)) throw new ActiveCollabError("ID de cuenta no válido.");
+  return `${CLOUD_BASE}/${accountId}`;
+}
+
+// ---------- credenciales de la petición en curso ----------
+
+const credentialsStore = new AsyncLocalStorage<AcCredentials>();
+
+export function runWithCredentials<T>(creds: AcCredentials, fn: () => T): T {
+  return credentialsStore.run(creds, fn);
+}
+
+export function currentCredentials(): AcCredentials {
+  const creds = credentialsStore.getStore();
+  if (!creds) throw new ActiveCollabError("No hay una sesión de ActiveCollab activa. Vuelve a conectar el conector en Claude.");
+  return creds;
+}
+
+// ---------- login en la nube (lo usa la página de autorización) ----------
 
 async function postJson(url: string, body: unknown, headers: Record<string, string> = {}) {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json", ...headers },
     body: JSON.stringify(body),
+    cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
   });
   const text = await res.text();
-  let json: unknown = null;
+  let json: Record<string, unknown> | null = null;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
     // respuesta no JSON
   }
-  return { res, json: json as Record<string, unknown> | null, text };
+  return { res, json };
 }
 
-/** Login en la nube: email + contraseña -> intent -> token para la cuenta indicada. */
-export async function issueCloudToken(opts: {
-  email: string;
-  password: string;
-  accountId: string;
-  twoFactorCode?: string;
-  intentId?: string;
-}): Promise<string> {
-  const login = opts.intentId
-    ? await postJson(CLOUD_LOGIN_URL, { intent_id: opts.intentId, code: opts.twoFactorCode })
-    : await postJson(CLOUD_LOGIN_URL, { email: opts.email, password: opts.password });
+export type CloudAccount = { id: string; name: string; intent: string };
 
-  const data = login.json;
-  if (data?.intent_id && !data?.is_ok) {
-    throw new ActiveCollabError(
-      "La cuenta tiene verificación en dos pasos. Genera el token con `npm run get-token` y guárdalo en ACTIVECOLLAB_TOKEN.",
-      login.res.status,
-      { intent_id: data.intent_id },
-    );
-  }
-  if (!data?.is_ok) {
-    throw new ActiveCollabError(
-      `No se pudo iniciar sesión en ActiveCollab: ${(data?.message as string) || login.text || login.res.status}`,
-      login.res.status,
-    );
-  }
+export type CloudLoginResult =
+  | { status: "ok"; accounts: CloudAccount[]; displayName?: string }
+  | { status: "two_factor"; intentId: string }
+  | { status: "error"; message: string };
 
-  const accounts = (data.accounts as Array<Record<string, unknown>>) || [];
-  const account = accounts.find((a) => String(a.name) === String(opts.accountId));
-  if (!account) {
-    const ids = accounts.map((a) => `${a.name} (${a.display_name})`).join(", ");
-    throw new ActiveCollabError(
-      `El usuario no tiene acceso a la cuenta ${opts.accountId}. Cuentas disponibles: ${ids || "ninguna"}`,
-    );
+function parseLogin(json: Record<string, unknown> | null, status: number): CloudLoginResult {
+  if (json?.intent_id && !json?.is_ok) return { status: "two_factor", intentId: String(json.intent_id) };
+  if (!json?.is_ok) {
+    const msg = typeof json?.message === "string" ? json.message : `Error ${status}`;
+    return { status: "error", message: msg };
   }
-  if (!account.intent) {
-    throw new ActiveCollabError(`ActiveCollab no devolvió un intent para la cuenta ${opts.accountId}.`);
-  }
+  const accounts = ((json.accounts as Array<Record<string, unknown>>) || [])
+    .filter(
+      (a) =>
+        a.intent &&
+        (a.class === "FeatherApplicationInstance" || a.class === "ActiveCollab\\Shepherd\\Model\\Account\\ActiveCollab\\FeatherAccount"),
+    )
+    .map((a) => ({ id: String(a.name), name: String(a.display_name || a.name), intent: String(a.intent) }))
+    .filter((a) => /^\d{1,12}$/.test(a.id));
+  const user = json.user as Record<string, unknown> | undefined;
+  const displayName = [user?.first_name, user?.last_name].filter(Boolean).join(" ") || undefined;
+  return { status: "ok", accounts, displayName };
+}
 
-  const issued = await postJson(`https://app.activecollab.com/${opts.accountId}/api/v1/issue-token`, {
+export async function cloudLogin(email: string, password: string): Promise<CloudLoginResult> {
+  const { res, json } = await postJson(LOGIN_URL, { email, password });
+  return parseLogin(json, res.status);
+}
+
+export async function cloudLoginTwoFactor(intentId: string, code: string): Promise<CloudLoginResult> {
+  const { res, json } = await postJson(LOGIN_URL, { intent_id: intentId, code });
+  return parseLogin(json, res.status);
+}
+
+export async function issueAccountToken(accountId: string, intent: string): Promise<string> {
+  const { res, json } = await postJson(`${accountBaseUrl(accountId)}/api/v1/issue-token`, {
     client_vendor: CLIENT_VENDOR,
     client_name: CLIENT_NAME,
-    intent: account.intent,
+    intent,
   });
-  if (!issued.json?.is_ok || !issued.json?.token) {
-    throw new ActiveCollabError("ActiveCollab rechazó la emisión del token.", issued.res.status, issued.json);
+  if (!json?.is_ok || !json?.token) {
+    throw new ActiveCollabError("ActiveCollab no emitió el token de acceso.", res.status);
   }
-  return String(issued.json.token);
+  return String(json.token);
 }
 
-/** Instalación propia (self-hosted): POST /issue-token con usuario y contraseña. */
-async function issueSelfHostedToken(apiUrl: string, email: string, password: string) {
-  const issued = await postJson(`${apiUrl}/issue-token`, {
-    username: email,
-    password,
-    client_name: CLIENT_NAME,
-    client_vendor: CLIENT_VENDOR,
-  });
-  if (!issued.json?.is_ok || !issued.json?.token) {
-    throw new ActiveCollabError(
-      `No se pudo obtener el token: ${(issued.json?.message as string) || issued.res.status}`,
-      issued.res.status,
-    );
-  }
-  return String(issued.json.token);
-}
-
-// El token obtenido con email/contraseña se guarda en memoria mientras la función siga viva.
-let cachedToken: string | undefined;
-
-async function getToken(forceRefresh = false): Promise<string> {
-  const cfg = getConfig();
-  if (cfg.token) return cfg.token;
-  if (cachedToken && !forceRefresh) return cachedToken;
-  if (!cfg.email || !cfg.password) {
-    throw new ActiveCollabError(
-      "Falta configurar ActiveCollab: define ACTIVECOLLAB_TOKEN, o ACTIVECOLLAB_EMAIL y ACTIVECOLLAB_PASSWORD.",
-    );
-  }
-  cachedToken = cfg.accountId && !process.env.ACTIVECOLLAB_BASE_URL
-    ? await issueCloudToken({ email: cfg.email, password: cfg.password, accountId: cfg.accountId })
-    : await issueSelfHostedToken(cfg.apiUrl, cfg.email, cfg.password);
-  return cachedToken;
-}
+// ---------- peticiones a la API ----------
 
 export type RequestOptions = {
   query?: Record<string, string | number | boolean | undefined | null>;
   body?: unknown;
 };
 
-/** Construye la URL final. `path` es relativo a /api/v1, p. ej. "/projects/1/tasks". */
-export function buildUrl(path: string, query?: RequestOptions["query"]) {
-  const cfg = getConfig();
-  if (!cfg.apiUrl) {
-    throw new ActiveCollabError("Falta configurar ACTIVECOLLAB_ACCOUNT_ID (o ACTIVECOLLAB_BASE_URL).");
-  }
+/** `path` es relativo a /api/v1, p. ej. "/projects/1/tasks". */
+export function buildUrl(accountId: string, path: string, query?: RequestOptions["query"]) {
   const clean = path.trim().replace(/^https?:\/\/[^/]+/i, "").replace(/^\/?api\/v1/, "");
-  if (clean.includes("..")) throw new ActiveCollabError("Ruta no válida.");
-  const url = new URL(cfg.apiUrl + "/" + clean.replace(/^\/+/, ""));
+  if (clean.includes("..") || clean.includes("\\") || /[\r\n]/.test(clean)) {
+    throw new ActiveCollabError("Ruta no válida.");
+  }
+  const apiRoot = `${accountBaseUrl(accountId)}/api/v1`;
+  const url = new URL(apiRoot + "/" + clean.replace(/^\/+/, ""));
+  // La URL final siempre debe quedar dentro de la API de la cuenta.
+  if (!url.href.startsWith(apiRoot + "/") && url.href !== apiRoot) throw new ActiveCollabError("Ruta no válida.");
   for (const [k, v] of Object.entries(query || {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
@@ -169,32 +151,26 @@ export async function acRequest<T = unknown>(
   method: HttpMethod,
   path: string,
   opts: RequestOptions = {},
+  creds: AcCredentials = currentCredentials(),
 ): Promise<T> {
-  const cfg = getConfig();
-  if (cfg.readOnly && method !== "GET") {
+  if (getConfig().readOnly && method !== "GET") {
     throw new ActiveCollabError(
-      "El servidor está en modo solo lectura (ACTIVECOLLAB_READ_ONLY=true). Solo se permiten peticiones GET.",
+      "El servidor está en modo solo lectura (ACTIVECOLLAB_READ_ONLY=true). Solo se permiten consultas.",
     );
   }
-  const url = buildUrl(path, opts.query);
-
-  const send = async (token: string) =>
-    fetch(url, {
-      method,
-      headers: {
-        "X-Angie-AuthApiToken": token,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: method === "GET" ? undefined : JSON.stringify(opts.body ?? {}),
-      cache: "no-store",
-    });
-
-  let res = await send(await getToken());
-  // Si el token automático caducó, se pide uno nuevo una sola vez.
-  if (res.status === 401 && !cfg.token && (cfg.email || cachedToken)) {
-    res = await send(await getToken(true));
-  }
+  const url = buildUrl(creds.accountId, path, opts.query);
+  const res = await fetch(url, {
+    method,
+    headers: {
+      "X-Angie-AuthApiToken": creds.token,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: method === "GET" ? undefined : JSON.stringify(opts.body ?? {}),
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  });
 
   const text = await res.text();
   let data: unknown = text;
@@ -205,11 +181,21 @@ export async function acRequest<T = unknown>(
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      throw new ActiveCollabError(
+        "ActiveCollab rechazó la sesión (token revocado o caducado). Desconecta y vuelve a conectar el conector en Claude.",
+        401,
+      );
+    }
     const msg =
       (data && typeof data === "object" && "message" in data && String((data as { message: unknown }).message)) ||
       res.statusText;
-    // Las respuestas de error de ActiveCollab traen trazas internas largas; se recortan.
-    if (data && typeof data === "object") delete (data as Record<string, unknown>).trace;
+    // Las respuestas de error de ActiveCollab traen trazas internas largas; se quitan.
+    if (data && typeof data === "object") {
+      delete (data as Record<string, unknown>).trace;
+      delete (data as Record<string, unknown>).file;
+      delete (data as Record<string, unknown>).line;
+    }
     throw new ActiveCollabError(`ActiveCollab respondió ${res.status} en ${method} ${url.pathname}: ${msg}`, res.status, data);
   }
   return data as T;

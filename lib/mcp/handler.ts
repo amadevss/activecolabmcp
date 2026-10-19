@@ -1,5 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import { createMcpHandler } from "mcp-handler";
+import { createMcpHandler, withMcpAuth } from "mcp-handler";
+import { runWithCredentials } from "@/lib/activecollab/client";
+import { publicOrigin, readAccessToken, SCOPE } from "@/lib/auth/oauth";
 import { registerTools, SERVER_INSTRUCTIONS } from "./tools";
 
 const mcpHandler = createMcpHandler(
@@ -7,7 +8,7 @@ const mcpHandler = createMcpHandler(
     registerTools(server);
   },
   {
-    serverInfo: { name: "activecollab-mcp", version: "1.0.0" },
+    serverInfo: { name: "activecollab-mcp", version: "2.0.0" },
     instructions: SERVER_INSTRUCTIONS,
   },
   {
@@ -18,40 +19,34 @@ const mcpHandler = createMcpHandler(
   },
 );
 
-function sameSecret(a: string, b: string) {
-  const ha = createHash("sha256").update(a).digest();
-  const hb = createHash("sha256").update(b).digest();
-  return timingSafeEqual(ha, hb);
-}
-
-const json = (status: number, error: string) =>
-  Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });
-
 /**
- * Valida la clave y pasa la petición al servidor MCP.
- * La clave puede llegar en la ruta (/api/mcp/<clave>, para los conectores de Claude)
- * o en la cabecera Authorization: Bearer <clave> (para Claude Code / Desktop).
+ * Endpoint MCP protegido con OAuth.
+ * Sin token válido responde 401 con la dirección de los metadatos, y Claude inicia el login solo.
+ * Con token válido, cada herramienta usa la cuenta de ActiveCollab de esa persona.
  */
-export async function handleMcpRequest(req: Request, keyFromPath?: string) {
-  const expected = process.env.MCP_SECRET;
-  if (!expected || expected.length < 16) {
-    return json(500, "El servidor no tiene configurada MCP_SECRET (mínimo 16 caracteres).");
-  }
-  const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  const provided = keyFromPath ?? bearer;
-  if (!provided || !sameSecret(provided, expected)) {
-    return json(401, "Clave de acceso inválida.");
-  }
+export async function handleMcpRequest(req: Request) {
+  const origin = publicOrigin(req);
 
-  // mcp-handler solo atiende la ruta exacta /api/mcp, así que reescribimos la URL.
-  const url = new URL(req.url);
-  url.pathname = "/api/mcp";
-  const hasBody = !["GET", "HEAD"].includes(req.method);
-  const forwarded = new Request(url, {
-    method: req.method,
-    headers: req.headers,
-    body: hasBody ? await req.arrayBuffer() : undefined,
-    signal: req.signal,
-  });
-  return mcpHandler(forwarded);
+  const authed = withMcpAuth(
+    (request: Request) => {
+      const extra = request.auth?.extra as { acct: string; act: string; em: string } | undefined;
+      if (!extra) return new Response("Unauthorized", { status: 401 });
+      return runWithCredentials({ accountId: extra.acct, token: extra.act, email: extra.em }, () => mcpHandler(request));
+    },
+    async (_req, bearerToken) => {
+      const data = readAccessToken(bearerToken, origin);
+      if (!data) return undefined;
+      return {
+        token: bearerToken!,
+        clientId: data.cid,
+        scopes: [SCOPE],
+        expiresAt: data.exp,
+        resource: new URL(data.aud),
+        extra: { acct: data.acct, act: data.act, em: data.em },
+      };
+    },
+    { required: true, resourceUrl: origin, resourceMetadataPath: "/.well-known/oauth-protected-resource" },
+  );
+
+  return authed(req);
 }
