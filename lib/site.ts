@@ -4,16 +4,41 @@
  */
 export const site = {
   name: process.env.SERVICE_NAME || "ActiveCollab MCP",
+  tagline: "Conecta Claude con ActiveCollab",
+  description:
+    "Conecta Claude con tu cuenta de ActiveCollab en un minuto. Revisa tareas, crea proyectos, registra horas y consulta facturas desde el chat, con tus propios permisos.",
+  keywords: [
+    "ActiveCollab",
+    "Claude",
+    "MCP",
+    "Model Context Protocol",
+    "conector",
+    "gestión de proyectos",
+    "IA",
+    "automatización",
+    "tareas",
+    "registro de horas",
+  ],
   ownerName: process.env.SERVICE_OWNER_NAME || "Bryan Oliveros Pérez",
   contactEmail: process.env.SERVICE_CONTACT_EMAIL || "grupoconnectados@gmail.com",
   repoUrl: "https://github.com/amadevss/activecolabmcp",
   policiesUpdated: "19 de octubre de 2026",
 };
 
-/** URL pública (PUBLIC_URL o el dominio de producción que Vercel pone en el build). */
+/** Normaliza una URL ("mi-app.vercel.app", ".../api/mcp", etc.) a su origen. */
+function toOrigin(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  try {
+    return new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** URL pública: PUBLIC_URL, o el dominio de producción que Vercel pone en el build. */
 export const publicUrl =
-  process.env.PUBLIC_URL?.replace(/\/+$/, "") ||
-  (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "https://<este-sitio>");
+  toOrigin(process.env.PUBLIC_URL) ?? toOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL) ?? "http://localhost:3000";
 
 export const mcpUrl = `${publicUrl}/api/mcp`;
 
