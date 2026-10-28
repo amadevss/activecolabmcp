@@ -20,6 +20,17 @@ const redis = url && token ? new Redis({ url, token }) : null;
 
 export const rateLimitEnabled = !!redis;
 
+/** Comprueba si Redis responde (para la página de estado). */
+export async function redisStatus(): Promise<"not_configured" | "ok" | "error"> {
+  if (!redis) return "not_configured";
+  try {
+    await redis.ping();
+    return "ok";
+  } catch {
+    return "error";
+  }
+}
+
 const RULES = {
   // Intentos de login por IP y por email.
   loginIp: { tokens: 10, window: "10 m" },

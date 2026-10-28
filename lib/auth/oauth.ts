@@ -9,11 +9,25 @@ export const CODE_TTL = 60; // 1 minuto
 export const AUTH_REQUEST_TTL = 10 * 60; // 10 minutos para completar el login
 export const PENDING_TTL = 5 * 60; // 5 minutos para el código 2FA / elegir cuenta
 
+/**
+ * Normaliza PUBLIC_URL: acepta "mi-app.vercel.app", "https://mi-app.vercel.app/" o incluso la URL
+ * completa del MCP ("…/api/mcp"), y devuelve solo el origen ("https://mi-app.vercel.app").
+ * Devuelve null si no está definida o no es válida.
+ */
+export function configuredPublicOrigin(): string | null {
+  const raw = process.env.PUBLIC_URL?.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
 /** Origen público del servidor. Fijarlo con PUBLIC_URL evita depender de la cabecera Host. */
 export function publicOrigin(req: Request): string {
-  const fixed = process.env.PUBLIC_URL?.trim().replace(/\/+$/, "");
-  if (fixed) return fixed;
-  return new URL(req.url).origin;
+  return configuredPublicOrigin() ?? new URL(req.url).origin;
 }
 
 export const resourceUrl = (origin: string) => `${origin}/api/mcp`;

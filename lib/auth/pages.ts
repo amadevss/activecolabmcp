@@ -22,6 +22,9 @@ input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .acct{display:block;width:100%;text-align:left;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--text);font-size:16px;cursor:pointer}
 .acct small{color:var(--muted)}
 .note{font-size:13px;margin-top:18px}
+.chk{list-style:none;padding:0;margin:0}.chk li{padding:12px 0;border-top:1px solid var(--border)}.chk b{display:block}.chk span{color:var(--muted);font-size:14px}
+.ok{color:#16a34a}.bad{color:#dc2626}.warn{color:#d97706}
+code{word-break:break-all;font-size:14px}
 a{color:var(--accent)}
 `;
 
@@ -107,4 +110,24 @@ ${cancelButton(o.reqToken)}`,
 
 export function errorPage(title: string, message: string, status = 400) {
   return htmlResponse(layout(title, `<h1>${esc(title)}</h1><p>${esc(message)}</p>`), { status });
+}
+
+export type Check = { level: "ok" | "warn" | "bad"; title: string; detail: string };
+
+/** Página de diagnóstico: muestra qué está bien o mal configurado, sin revelar secretos. */
+export function statusPage(checks: Check[], mcpUrl: string) {
+  const icon = { ok: "✓", warn: "!", bad: "✗" };
+  const allOk = checks.every((c) => c.level !== "bad");
+  const items = checks
+    .map((c) => `<li><b class="${c.level}">${icon[c.level]} ${esc(c.title)}</b><span>${esc(c.detail)}</span></li>`)
+    .join("");
+  return htmlResponse(
+    layout(
+      "Estado del servidor",
+      `<h1>Estado del servidor</h1>
+<p>${allOk ? "Todo listo para conectar Claude." : "Hay que corregir lo marcado en rojo y volver a desplegar."}</p>
+<ul class="chk">${items}</ul>
+<p class="note">URL para Claude:<br><code>${esc(mcpUrl)}</code></p>`,
+    ),
+  );
 }
