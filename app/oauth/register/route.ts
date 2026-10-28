@@ -39,11 +39,18 @@ export async function POST(req: Request) {
   }
 
   const clientName = typeof body.client_name === "string" ? body.client_name.slice(0, 80) : "Cliente MCP";
-  const { client_id, client_secret, iat } = registerClient({
-    redirect_uris: redirectUris as string[],
-    client_name: clientName,
-    auth_method: method as AuthMethod,
-  });
+  let registered: ReturnType<typeof registerClient>;
+  try {
+    registered = registerClient({
+      redirect_uris: redirectUris as string[],
+      client_name: clientName,
+      auth_method: method as AuthMethod,
+    });
+  } catch (err) {
+    console.error("oauth/register:", (err as Error).message);
+    return oauthError("server_error", `Configuración del servidor incompleta: ${(err as Error).message}`, 500);
+  }
+  const { client_id, client_secret, iat } = registered;
 
   return jsonResponse(
     {

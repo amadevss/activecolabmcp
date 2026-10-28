@@ -23,12 +23,18 @@ const PREFIX: Record<Purpose, string> = {
 
 const keyCache = new Map<string, Buffer>();
 
+/** Estado de AUTH_SECRET (sin revelar su valor). */
+export function authSecretStatus(): { ok: true } | { ok: false; reason: string } {
+  const secret = process.env.AUTH_SECRET?.trim();
+  if (!secret) return { ok: false, reason: "AUTH_SECRET no está configurada." };
+  if (secret.length < 32) return { ok: false, reason: `AUTH_SECRET es demasiado corta (${secret.length} caracteres; mínimo 32).` };
+  return { ok: true };
+}
+
 function masterSecret(): string {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error("AUTH_SECRET no está configurada o es demasiado corta (mínimo 32 caracteres).");
-  }
-  return secret;
+  const status = authSecretStatus();
+  if (!status.ok) throw new Error(status.reason);
+  return process.env.AUTH_SECRET!.trim();
 }
 
 function key(label: string): Buffer {
