@@ -2,7 +2,11 @@ import type { Metadata } from "next";
 import { LegalPage } from "@/components/legal";
 import { site } from "@/lib/site";
 
-export const metadata: Metadata = { title: `Términos de uso · ${site.name}` };
+export const metadata: Metadata = {
+  title: "Términos de uso",
+  description: `Condiciones de uso de ${site.name}.`,
+  alternates: { canonical: "/terminos" },
+};
 
 export default function Terminos() {
   return (
